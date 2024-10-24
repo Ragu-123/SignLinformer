@@ -1,0 +1,26 @@
+# Configuration for the encoder
+linformer_encoder_config = {
+    "seq_len": 50,        # Max sequence length
+    "depth": 4,           # Number of layers
+    "k": 256,             # Low-rank approximation for Linformer
+    "heads": 8,           # Number of attention heads
+    "dropout": 0.1        # Dropout rate
+}
+
+# Configuration for the decoder
+linformer_decoder_config = {
+    "seq_len": 50,        # Max sequence length for keypoints
+    "depth": 4,           # Number of layers
+    "k": 256,             # Low-rank approximation
+    "heads": 8,           # Number of attention heads
+    "dropout": 0.1        # Dropout rate
+}
+
+#configuration for initialization
+cfg = {
+    "initializer": "xavier",
+    "init_gain": 1.0,
+    "embed_initializer": "normal",
+    "embed_init_weight": 0.01,
+    "bias_initializer": "zeros"
+}
