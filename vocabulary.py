@@ -1,113 +1,214 @@
-import os
-import pandas as pd
-import re
-from collections import Counter
-from typing import List, Dict
+# coding: utf-8
+
+"""
+Vocabulary module
+"""
+from collections import defaultdict, Counter
+from typing import List
+import numpy as np
+
+from torchtext.data import Dataset
+
+from constants import UNK_TOKEN, DEFAULT_UNK_ID, \
+    EOS_TOKEN, BOS_TOKEN, PAD_TOKEN
+
 
 class Vocabulary:
-    def __init__(self, pad_token: str = "<PAD>", sos_token: str = "<SOS>", eos_token: str = "<EOS>", unk_token: str = "<UNK>"):
+    """ Vocabulary represents mapping between tokens and indices. """
+
+    def __init__(self, tokens: List[str] = None, file: str = None) -> None:
+        # don't rename stoi and itos since needed for torchtext
+        # warning: stoi grows with unknown tokens, don't use for saving or size
+
+        # special symbols
+        self.specials = [UNK_TOKEN, PAD_TOKEN, BOS_TOKEN, EOS_TOKEN]
+
+        self.stoi = defaultdict(DEFAULT_UNK_ID)
+        self.itos = []
+        if tokens is not None:
+            self._from_list(tokens)
+        elif file is not None:
+            self._from_file(file)
+
+    def _from_list(self, tokens: List[str] = None) -> None:
         """
-        Initializes the Vocabulary with special tokens.
+        Make vocabulary from list of tokens.
+        Tokens are assumed to be unique and pre-selected.
+        Special symbols are added if not in list.
+
+        :param tokens: list of tokens
         """
-        self.pad_token = pad_token
-        self.sos_token = sos_token
-        self.eos_token = eos_token
-        self.unk_token = unk_token
-        self.word2idx = {}
-        self.idx2word = {}
-        self.word_count = Counter()
-        
-        # Initialize with special tokens
-        self.add_special_tokens()
+        self.add_tokens(tokens=self.specials + tokens)
+        assert len(self.stoi) == len(self.itos)
 
-    def add_special_tokens(self):
-        """Adds special tokens to the vocabulary."""
-        special_tokens = [self.pad_token, self.sos_token, self.eos_token, self.unk_token]
-        for token in special_tokens:
-            self.add_word(token)
-
-    def add_word(self, word: str):
-        """Adds a word to the vocabulary if it's not already present."""
-        if word not in self.word2idx:
-            idx = len(self.word2idx)
-            self.word2idx[word] = idx
-            self.idx2word[idx] = word
-        self.word_count[word] += 1  # Track frequency of the word for analysis
-    
-    def tokenize_sentence(self, sentence: str) -> List[str]:
-        """Tokenizes a sentence into words/tokens, removing punctuation and converting to lowercase."""
-        # Convert to lowercase and remove punctuation
-        sentence = sentence.lower()
-        tokens = re.findall(r'\b\w+\b', sentence)  # Extract words (alphanumeric)
-        return tokens
-
-    def build_vocabulary(self, csv_paths: List[str], min_freq: int = 1):
+    def _from_file(self, file: str) -> None:
         """
-        Builds the vocabulary from a list of CSV files containing the sentences.
-        Args:
-        - csv_paths: List of paths to CSV files.
-        - min_freq: Minimum frequency a word must have to be included in the vocabulary.
+        Make vocabulary from contents of file.
+        File format: token with index i is in line i.
+
+        :param file: path to file where the vocabulary is loaded from
         """
-        for csv_path in csv_paths:
-            if not os.path.exists(csv_path):
-                raise FileNotFoundError(f"CSV file {csv_path} does not exist.")
-            
-            # Load CSV data
-            df = pd.read_csv(csv_path)
-            if "SENTENCE" not in df.columns:
-                raise ValueError(f"Expected 'SENTENCE' column in CSV {csv_path}, but not found.")
+        tokens = []
+        with open(file, "r") as open_file:
+            for line in open_file:
+                tokens.append(line.strip("\n"))
+        self._from_list(tokens)
 
-            # Tokenize sentences and update vocabulary
-            for sentence in df["SENTENCE"].dropna():
-                tokens = self.tokenize_sentence(sentence)
-                for token in tokens:
-                    self.word_count[token] += 1
+    def __str__(self) -> str:
+        return self.stoi.__str__()
 
-        # Filter vocabulary by minimum frequency
-        for word, count in self.word_count.items():
-            if count >= min_freq:
-                self.add_word(word)
-    
-    def sentence_to_indices(self, sentence: str) -> List[int]:
-        """Converts a sentence into a list of token indices."""
-        tokens = self.tokenize_sentence(sentence)
-        return [self.word2idx.get(token, self.word2idx[self.unk_token]) for token in tokens]
-    
-    def indices_to_sentence(self, indices: List[int]) -> str:
-        """Converts a list of token indices back into a sentence."""
-        return ' '.join([self.idx2word.get(idx, self.unk_token) for idx in indices])
+    def to_file(self, file: str) -> None:
+        """
+        Save the vocabulary to a file, by writing token with index i in line i.
 
-    def save_vocabulary(self, path: str):
-        """Saves the vocabulary to a JSON file."""
-        vocab_data = {
-            "word2idx": self.word2idx,
-            "idx2word": self.idx2word
-        }
-        pd.DataFrame(vocab_data).to_json(path, orient='columns')
+        :param file: path to file where the vocabulary is written
+        """
+        with open(file, "w") as open_file:
+            for t in self.itos:
+                open_file.write("{}\n".format(t))
 
-    def load_vocabulary(self, path: str):
-        """Loads the vocabulary from a JSON file."""
-        vocab_data = pd.read_json(path, orient='columns')
-        self.word2idx = vocab_data["word2idx"].to_dict()
-        self.idx2word = vocab_data["idx2word"].to_dict()
+    def add_tokens(self, tokens: List[str]) -> None:
+        """
+        Add list of tokens to vocabulary
 
-# Example Usage:
-if __name__ == "__main__":
-    csv_train = r"C:\Users\SEC\Downloads\miniproject\dataset\How2Sign\sentence_level\train\text\en\raw_text\re_aligned\how2sign_realigned_train.csv"
-    csv_val = r"C:\Users\SEC\Downloads\miniproject\dataset\How2Sign\sentence_level\val\text\en\raw_text\re_aligned\how2sign_realigned_val.csv"
-    
-    vocab = Vocabulary()
-    
-    # Build vocabulary from train and validation CSVs
-    vocab.build_vocabulary([csv_train, csv_val], min_freq=2)
-    
-    # Example: Converting a sentence to indices
-    example_sentence = "life is beautiful"
-    indices = vocab.sentence_to_indices(example_sentence)
-    print(f"Sentence: {example_sentence} -> Indices: {indices}")
-    
-    # Save the vocabulary
-    vocab.save_vocabulary("vocab.json")
-    
-    # Load vocabulary (example)
-    vocab.load_vocabulary("vocab.json")
+        :param tokens: list of tokens to add to the vocabulary
+        """
+        for t in tokens:
+            new_index = len(self.itos)
+            # add to vocab if not already there
+            if t not in self.itos:
+                self.itos.append(t)
+                self.stoi[t] = new_index
+
+    def is_unk(self, token: str) -> bool:
+        """
+        Check whether a token is covered by the vocabulary
+
+        :param token:
+        :return: True if covered, False otherwise
+        """
+        return self.stoi[token] == DEFAULT_UNK_ID()
+
+    def __len__(self) -> int:
+        return len(self.itos)
+
+    def array_to_sentence(self, array: np.array, cut_at_eos=True) -> List[str]:
+        """
+        Converts an array of IDs to a sentence, optionally cutting the result
+        off at the end-of-sequence token.
+
+        :param array: 1D array containing indices
+        :param cut_at_eos: cut the decoded sentences at the first <eos>
+        :return: list of strings (tokens)
+        """
+        sentence = []
+        for i in array:
+            s = self.itos[i]
+            if cut_at_eos and s == EOS_TOKEN:
+                break
+            sentence.append(s)
+        return sentence
+
+    def arrays_to_sentences(self, arrays: np.array, cut_at_eos=True) \
+            -> List[List[str]]:
+        """
+        Convert multiple arrays containing sequences of token IDs to their
+        sentences, optionally cutting them off at the end-of-sequence token.
+
+        :param arrays: 2D array containing indices
+        :param cut_at_eos: cut the decoded sentences at the first <eos>
+        :return: list of list of strings (tokens)
+        """
+        sentences = []
+        for array in arrays:
+            sentences.append(
+                self.array_to_sentence(array=array, cut_at_eos=cut_at_eos))
+        return sentences
+
+    def get_tokens(self) -> List[str]:
+        """
+        Returns the list of tokens in the vocabulary.
+
+        :return: List of tokens.
+        """
+        return self.itos
+
+    def token_to_index(self, token: str) -> int:
+        """
+        Returns the index of a token.
+
+        :param token: The token to look up.
+        :return: The index of the token, or DEFAULT_UNK_ID if not found.
+        """
+        return self.stoi.get(token, DEFAULT_UNK_ID())
+
+    def index_to_token(self, index: int) -> str:
+        """
+        Returns the token associated with an index.
+
+        :param index: The index to look up.
+        :return: The corresponding token.
+        """
+        if index < len(self.itos):
+            return self.itos[index]
+        return UNK_TOKEN  # return UNK if index is out of bounds
+
+
+def build_vocab(field: str, max_size: int, min_freq: int, dataset: Dataset,
+                vocab_file: str = None) -> Vocabulary:
+    """
+    Builds vocabulary for a torchtext `field` from given `dataset` or
+    `vocab_file`.
+
+    :param field: attribute e.g. "src"
+    :param max_size: maximum size of vocabulary
+    :param min_freq: minimum frequency for an item to be included
+    :param dataset: dataset to load data for field from
+    :param vocab_file: file to store the vocabulary,
+        if not None, load vocabulary from here
+    :return: Vocabulary created from either `dataset` or `vocab_file`
+    """
+
+    if vocab_file is not None:
+        # load it from file
+        vocab = Vocabulary(file=vocab_file)
+    else:
+        # create newly
+        def filter_min(counter: Counter, min_freq: int):
+            """ Filter counter by min frequency """
+            filtered_counter = Counter({t: c for t, c in counter.items()
+                                        if c >= min_freq})
+            return filtered_counter
+
+        def sort_and_cut(counter: Counter, limit: int):
+            """ Cut counter to most frequent,
+            sorted numerically and alphabetically"""
+            # sort by frequency, then alphabetically
+            tokens_and_frequencies = sorted(counter.items(),
+                                            key=lambda tup: tup[0])
+            tokens_and_frequencies.sort(key=lambda tup: tup[1], reverse=True)
+            vocab_tokens = [i[0] for i in tokens_and_frequencies[:limit]]
+            return vocab_tokens
+
+        tokens = []
+        for i in dataset.examples:
+            if field == "src":
+                tokens.extend(i.src)
+            elif field == "trg":
+                tokens.extend(i.trg)
+
+        counter = Counter(tokens)
+        if min_freq > -1:
+            counter = filter_min(counter, min_freq)
+        vocab_tokens = sort_and_cut(counter, max_size)
+        assert len(vocab_tokens) <= max_size
+
+        vocab = Vocabulary(tokens=vocab_tokens)
+        assert len(vocab) <= max_size + len(vocab.specials)
+        assert vocab.itos[DEFAULT_UNK_ID()] == UNK_TOKEN
+
+    # check for all except for UNK token whether they are OOVs
+    for s in vocab.specials[1:]:
+        assert not vocab.is_unk(s)
+
+    return vocab
