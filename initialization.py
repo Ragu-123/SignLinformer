@@ -1,7 +1,7 @@
 # coding: utf-8
 
 """
-Custom weight initialization for SignGenNet.
+Implements custom initialization
 """
 
 import math
@@ -10,14 +10,16 @@ import torch.nn as nn
 from torch import Tensor
 from torch.nn.init import _calculate_fan_in_and_fan_out
 
+
 def xavier_uniform_n_(w: Tensor, gain: float = 1., n: int = 4) -> None:
     """
     Xavier initializer for parameters that combine multiple matrices in one
-    parameter for efficiency. This is used for RNNs or other multi-gate structures.
+    parameter for efficiency. This is e.g. used for GRU and LSTM parameters,
+    where e.g. all gates are computed at the same time by 1 big matrix.
 
-    :param w: parameter tensor to initialize
-    :param gain: scaling factor for Xavier initialization, default is 1.
-    :param n: number of matrices combined, default is 4 (for LSTMs, GRUs).
+    :param w: parameter
+    :param gain: default 1
+    :param n: default 4
     """
     with torch.no_grad():
         fan_in, fan_out = _calculate_fan_in_and_fan_out(w)
@@ -27,73 +29,98 @@ def xavier_uniform_n_(w: Tensor, gain: float = 1., n: int = 4) -> None:
         a = math.sqrt(3.0) * std
         nn.init.uniform_(w, -a, a)
 
-def initialize_model(model: nn.Module, cfg: dict, src_padding_idx: int = None,
-                     trg_padding_idx: int = None) -> None:
+
+# pylint: disable=too-many-branches
+def initialize_model(model: nn.Module, cfg: dict, src_padding_idx: int,
+                     trg_padding_idx: int) -> None:
     """
-    Initialize weights for the SignGenNet model based on the provided config.
-    Handles embedding layers, Linformer attention, and transformer blocks.
+    This initializes a model based on the provided config.
 
-    :param model: The SignGenNet model to initialize.
-    :param cfg: Configuration dictionary for the model, containing initializer settings.
-    :param src_padding_idx: Padding index for source embeddings (optional).
-    :param trg_padding_idx: Padding index for target embeddings (optional).
+    All initializer configuration is part of the `model` section of the
+    configuration file.
+    For an example, see e.g. `https://github.com/joeynmt/joeynmt/
+    blob/master/configs/iwslt_envi_xnmt.yaml#L47`
+
+    The main initializer is set using the `initializer` key.
+    Possible values are `xavier`, `uniform`, `normal` or `zeros`.
+    (`xavier` is the default).
+
+    When an initializer is set to `uniform`, then `init_weight` sets the
+    range for the values (-init_weight, init_weight).
+
+    When an initializer is set to `normal`, then `init_weight` sets the
+    standard deviation for the weights (with mean 0).
+
+    The word embedding initializer is set using `embed_initializer` and takes
+    the same values. The default is `normal` with `embed_init_weight = 0.01`.
+
+    Biases are initialized separately using `bias_initializer`.
+    The default is `zeros`, but you can use the same initializers as
+    the main initializer.
+
+    :param model: model to initialize
+    :param cfg: the model configuration
+    :param src_padding_idx: index of source padding token
+    :param trg_padding_idx: index of target padding token
     """
 
-    # Config defaults
-    gain = float(cfg.get("init_gain", 1.0))  # gain for xavier
-    init = cfg.get("initializer", "xavier")  # default to xavier initialization
-    init_weight = float(cfg.get("init_weight", 0.01))  # range for uniform/normal init
+    # defaults: xavier, embeddings: normal 0.01, biases: zeros, no orthogonal
+    gain = float(cfg.get("init_gain", 1.0))  # for xavier
+    init = cfg.get("initializer", "xavier")
+    init_weight = float(cfg.get("init_weight", 0.01))
 
-    embed_init = cfg.get("embed_initializer", "normal")  # default for embeddings
-    embed_init_weight = float(cfg.get("embed_init_weight", 0.01))  # std for embeddings
-    embed_gain = float(cfg.get("embed_init_gain", 1.0))  # gain for xavier embeddings
+    embed_init = cfg.get("embed_initializer", "normal")
+    embed_init_weight = float(cfg.get("embed_init_weight", 0.01))
+    embed_gain = float(cfg.get("embed_init_gain", 1.0))  # for xavier
 
-    bias_init = cfg.get("bias_initializer", "zeros")  # bias initializer (zeros by default)
+    bias_init = cfg.get("bias_initializer", "zeros")
     bias_init_weight = float(cfg.get("bias_init_weight", 0.01))
 
-    # Helper function for initializers
-    def _parse_init(init_type, scale, _gain):
+    # pylint: disable=unnecessary-lambda, no-else-return
+    def _parse_init(s, scale, _gain):
         scale = float(scale)
-        if init_type.lower() == "xavier":
+        assert scale > 0., "incorrect init_weight"
+        if s.lower() == "xavier":
             return lambda p: nn.init.xavier_uniform_(p, gain=_gain)
-        elif init_type.lower() == "uniform":
+        elif s.lower() == "uniform":
             return lambda p: nn.init.uniform_(p, a=-scale, b=scale)
-        elif init_type.lower() == "normal":
+        elif s.lower() == "normal":
             return lambda p: nn.init.normal_(p, mean=0., std=scale)
-        elif init_type.lower() == "zeros":
+        elif s.lower() == "zeros":
             return lambda p: nn.init.zeros_(p)
         else:
-            raise ValueError(f"Unknown initializer: {init_type}")
+            raise ValueError("unknown initializer")
 
     init_fn_ = _parse_init(init, init_weight, gain)
     embed_init_fn_ = _parse_init(embed_init, embed_init_weight, embed_gain)
     bias_init_fn_ = _parse_init(bias_init, bias_init_weight, gain)
 
-    # Initialize model parameters
     with torch.no_grad():
         for name, p in model.named_parameters():
-            
-            # Embedding layers
+
             if "embed" in name:
                 if "bias" in name:
-                    bias_init_fn_(p)  # bias in embedding layers
+                    bias_init_fn_(p)
                 else:
-                    embed_init_fn_(p)  # weight in embedding layers
+                    embed_init_fn_(p)
 
-            # Linformer attention or transformer layers
-            elif "linformer" in name or "attention" in name:
-                init_fn_(p)  # initialize Linformer/Transformer weights
-
-            # Bias terms
             elif "bias" in name:
                 bias_init_fn_(p)
 
-            # Weights for linear layers
             elif len(p.size()) > 1:
-                init_fn_(p)
 
-        # Zero out embeddings for padding indices
-        if src_padding_idx is not None and hasattr(model, 'src_embed'):
-            model.src_embed.lut.weight.data[src_padding_idx].zero_()
-        if trg_padding_idx is not None and hasattr(model, 'trg_embed'):
-            model.trg_embed.lut.weight.data[trg_padding_idx].zero_()
+                # RNNs combine multiple matrices in one, which messes up
+                # xavier initialization
+                if init == "xavier" and "rnn" in name:
+                    n = 1
+                    if "encoder" in name:
+                        n = 4 if isinstance(model.encoder.rnn, nn.LSTM) else 3
+                    elif "decoder" in name:
+                        n = 4 if isinstance(model.decoder.rnn, nn.LSTM) else 3
+                    xavier_uniform_n_(p.data, gain=gain, n=n)
+                else:
+                    init_fn_(p)
+
+        # zero out paddings
+        model.src_embed.lut.weight.data[src_padding_idx].zero_()
+        model.trg_embed.lut.weight.data[trg_padding_idx].zero_()
